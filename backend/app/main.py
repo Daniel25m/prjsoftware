@@ -5,11 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.routes import adoptions, auth, pets
+from app.api.routes import adoptions, pets
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine, get_db
-from app.models import Adoption, Pet, User
+from app.models import Adoption, Pet
 
 
 @asynccontextmanager
@@ -27,11 +27,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(auth.router, prefix="/api")
 app.include_router(pets.router, prefix="/api")
 app.include_router(adoptions.router, prefix="/api")
 

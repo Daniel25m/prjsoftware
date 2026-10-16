@@ -33,63 +33,73 @@ def client(monkeypatch):
     engine.dispose()
 
 
-def register(client, name, email, role):
-    response = client.post(
-        "/api/auth/register",
-        json={"name": name, "email": email, "password": "adote12345", "role": role},
-    )
+def sample_pet(**overrides):
+    return {
+        "name": "Nina",
+        "species": "Cão",
+        "breed": "SRD",
+        "size": "medium",
+        "age_years": 2,
+        "city": "São Paulo",
+        "description": "Carinhosa e pronta para encontrar uma família.",
+        "image_url": "https://example.com/nina.jpg",
+        "donor_name": "Casa Amora",
+        **overrides,
+    }
+
+
+def test_publish_pet_and_filter_available_pets(client):
+    response = client.post("/api/pets", json=sample_pet())
+
     assert response.status_code == 201
-    return response.json()
+    assert response.json()["donor_name"] == "Casa Amora"
+    assert len(client.get("/api/pets", params={"city": "São Paulo"}).json()) == 1
+    assert client.get("/api/pets", params={"species": "Gato"}).json() == []
+    assert client.get(f"/api/pets/{response.json()['id']}").json()["name"] == "Nina"
 
 
-def test_donor_adopter_and_adoption_lifecycle(client):
-    donor = register(client, "Doadora", "doadora@example.com", "donor")
-    client.headers["Authorization"] = f"Bearer {donor['access_token']}"
-    pet_response = client.post(
-        "/api/pets",
+def test_submit_adoption_request_marks_pet_unavailable(client):
+    pet = client.post("/api/pets", json=sample_pet()).json()
+
+    response = client.post(
+        f"/api/pets/{pet['id']}/adoptions",
         json={
-            "name": "Nina",
-            "species": "Cão",
-            "breed": "SRD",
-            "size": "medium",
-            "age_years": 2,
-            "city": "São Paulo",
-            "description": "Carinhosa e pronta para encontrar uma família.",
-            "image_url": "https://example.com/nina.jpg",
+            "applicant_name": "Alex Silva",
+            "applicant_email": "alex@example.com",
+            "message": "Tenho tempo e espaço para cuidar muito bem da Nina.",
         },
     )
-    assert pet_response.status_code == 201
-    pet_id = pet_response.json()["id"]
 
-    adopter = register(client, "Adotante", "adotante@example.com", "adopter")
-    client.headers["Authorization"] = f"Bearer {adopter['access_token']}"
-    request_response = client.post(
-        f"/api/pets/{pet_id}/adoptions",
-        json={"message": "Tenho espaço e tempo para cuidar muito bem da Nina."},
-    )
-    assert request_response.status_code == 201
-    assert request_response.json()["status"] == "pending"
+    assert response.status_code == 201
+    assert response.json()["applicant_name"] == "Alex Silva"
+    assert response.json()["applicant_email"] == "alex@example.com"
     assert client.get("/api/pets").json() == []
 
-    client.headers["Authorization"] = f"Bearer {donor['access_token']}"
-    incoming = client.get("/api/adoptions/incoming")
-    assert incoming.status_code == 200
-    adoption_id = incoming.json()[0]["id"]
-    decision = client.patch(
-        f"/api/adoptions/{adoption_id}/decision",
-        json={"decision": "approved"},
+
+def test_pet_cannot_receive_multiple_adoption_requests(client):
+    pet = client.post("/api/pets", json=sample_pet()).json()
+    request = {
+        "applicant_name": "Alex Silva",
+        "applicant_email": "alex@example.com",
+        "message": "Tenho tempo e espaço para cuidar muito bem da Nina.",
+    }
+
+    first_response = client.post(f"/api/pets/{pet['id']}/adoptions", json=request)
+    second_response = client.post(f"/api/pets/{pet['id']}/adoptions", json=request)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+
+
+def test_adoption_request_requires_valid_contact_email(client):
+    pet = client.post("/api/pets", json=sample_pet()).json()
+    response = client.post(
+        f"/api/pets/{pet['id']}/adoptions",
+        json={
+            "applicant_name": "Alex Silva",
+            "applicant_email": "not-an-email",
+            "message": "Tenho tempo e espaço para cuidar muito bem da Nina.",
+        },
     )
-    assert decision.status_code == 200
-    assert decision.json()["status"] == "approved"
 
-    client.headers["Authorization"] = f"Bearer {adopter['access_token']}"
-    my_adoptions = client.get("/api/adoptions/mine")
-    assert my_adoptions.status_code == 200
-    assert my_adoptions.json()[0]["status"] == "approved"
-
-
-def test_adopter_cannot_publish_pet(client):
-    adopter = register(client, "Adotante", "adotante@example.com", "adopter")
-    client.headers["Authorization"] = f"Bearer {adopter['access_token']}"
-    response = client.post("/api/pets", json={})
-    assert response.status_code == 403
+    assert response.status_code == 422
